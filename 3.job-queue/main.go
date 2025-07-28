@@ -43,6 +43,7 @@ func main() {
 				fmt.Printf("Failed to add job %d: %v\n", j.ID, err)
 				break
 			}
+
 			time.Sleep(time.Millisecond * 200) // Small delay between adding jobs
 		}
 	}()
