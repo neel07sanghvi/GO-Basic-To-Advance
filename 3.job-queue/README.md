@@ -1,51 +1,96 @@
-# Job Queue with Go
+# Job Queue with Graceful Shutdown
 
-A simple job queue implementation using goroutines and channels in Go.
+A job queue implementation using goroutines, channels, and context cancellation for graceful shutdown in Go.
 
 ## Project Structure
 
 ```
 job-queue/
-├── main.go          # Application entry point
+├── main.go          # Application entry point with signal handling
 ├── go.mod           # Go module definition
 ├── job/
-│   └── job.go       # Job definition and processing logic
+│   └── job.go       # Job definition with context-aware processing
 ├── worker/
-│   └── worker.go    # Worker implementation
+│   └── worker.go    # Worker implementation with context cancellation
 └── queue/
-    └── queue.go     # Job queue management
+    └── queue.go     # Job queue with graceful shutdown management
 ```
+
+### What is Graceful Shutdown?
+- **Stops accepting new jobs** when shutdown is initiated
+- **Allows current jobs to complete** before terminating workers
+- **Provides timeout mechanism** to prevent hanging
+- **Handles system signals** (Ctrl+C, SIGTERM) properly
+
+### What is Context Cancellation?
+- **Context**: Go's standard way to carry cancellation signals
+- **Propagation**: Cancellation signal spreads through all goroutines
+- **Responsive**: Jobs can check if they should stop mid-processing
+- **Clean**: No abrupt termination or resource leaks
 
 ## Key Components
 
-### Job (`job/job.go`)
-- Defines what a job looks like
-- Contains job processing logic
-- Simple structure with ID, Name, and Payload
+### Enhanced Job Processing (`job/job.go`)
+```go
+// New method that respects context cancellation
+func (j Job) ProcessWithContext(ctx context.Context) error {
+    select {
+    case <-time.After(workTime):  // Normal completion
+        return nil
+    case <-ctx.Done():           // Cancelled during processing
+        return ctx.Err()
+    }
+}
+```
 
-### Worker (`worker/worker.go`)
-- Processes jobs from the job channel
-- Runs in its own goroutine
-- Can be started and stopped gracefully
+### Context-Aware Workers (`worker/worker.go`)
+```go
+func (w *Worker) Start(ctx context.Context) {
+    for {
+        select {
+        case job := <-w.JobChan:     // Process job
+        case <-ctx.Done():           // Shutdown signal received
+            return
+        }
+    }
+}
+```
 
-### Queue (`queue/queue.go`)
-- Manages multiple workers
-- Distributes jobs to available workers
-- Handles worker lifecycle
+### Graceful Queue Management (`queue/queue.go`)
+- **Shutdown()**: Graceful shutdown with timeout
+- **ForceShutdown()**: Immediate termination
+- **Context management**: Coordinates all workers
+- **Signal handling**: Responds to OS signals
 
-## How It Works
+## How Graceful Shutdown Works
 
-1. **Job Queue Creation**: Creates a specified number of workers and a buffered channel for jobs
-2. **Worker Start**: Each worker runs in its own goroutine, waiting for jobs
-3. **Job Distribution**: Jobs are sent to the channel, and workers pick them up automatically
-4. **Processing**: Workers process jobs one at a time
-5. **Graceful Shutdown**: All workers can be stopped cleanly
+### 1. Signal Detection
+```go
+// Catches Ctrl+C, SIGTERM, etc.
+sigChan := make(chan os.Signal, 1)
+signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+```
+
+### 2. Shutdown Phases
+```
+Phase 1: Stop accepting new jobs
+    ↓
+Phase 2: Let current jobs finish (with timeout)
+    ↓
+Phase 3: If timeout exceeded, force cancellation
+    ↓
+Phase 4: Wait for all workers to exit
+```
+
+### 3. Context Propagation
+```
+Main Context (cancelled on shutdown)
+    ├── Worker 1 Context ──→ Stops processing
+    ├── Worker 2 Context ──→ Stops processing
+    └── Worker 3 Context ──→ Stops processing
+```
 
 ## Running the Code
-
-1. Create the project directory structure
-2. Copy all the files to their respective locations
-3. Run the following commands:
 
 ```bash
 cd job-queue
@@ -53,30 +98,64 @@ go mod tidy
 go run main.go
 ```
 
-## Key Go Concepts Used
+### Testing Graceful Shutdown
+1. Run the program: `go run main.go`
+2. Press **Ctrl+C** while jobs are processing
+3. Observe how current jobs finish before shutdown
+4. Notice no abrupt termination
 
-- **Goroutines**: Lightweight threads for concurrent execution
-- **Channels**: Communication between goroutines
-- **Select Statement**: Non-blocking channel operations
-- **WaitGroup**: Synchronization to wait for goroutines to complete
-- **Buffered Channels**: Allows queuing jobs without blocking
+## Key Benefits
 
-## Sample Output
+### Before (Basic Shutdown)
+- ❌ Jobs might be interrupted mid-processing
+- ❌ No timeout handling
+- ❌ Potential resource leaks
+- ❌ Poor user experience
+
+### After (Graceful Shutdown)
+- ✅ Current jobs complete safely
+- ✅ Configurable shutdown timeout
+- ✅ Clean resource cleanup
+- ✅ Production-ready reliability
+
+## Real-World Applications
+
+### When This Matters
+- **Payment processing**: Don't interrupt money transfers
+- **File uploads**: Let uploads complete
+- **Database operations**: Ensure data consistency
+- **API requests**: Finish serving current requests
+
+### Production Scenarios
+- **Container orchestration** (Kubernetes, Docker)
+- **Load balancer draining** (removing servers from rotation)
+- **Application updates** (zero-downtime deployments)
+- **System maintenance** (planned shutdowns)
+
+## Configuration Options
+
+```go
+// Shutdown timeout - how long to wait for jobs to finish
+err := jobQueue.Shutdown(5 * time.Second)
+
+// Force shutdown - immediate termination
+jobQueue.ForceShutdown()
+```
+
+## Output Example
 
 ```
 Starting job queue with 3 workers
-Worker 1 started
-Worker 2 started  
-Worker 3 started
 Adding job 1 to queue
 Worker 1 received job 1
 Processing job 1: Send Email
-...
+^C
+Received signal: interrupt
+Initiating graceful shutdown...
+Job 1 completed: Welcome email to user@example.com
+Worker 1 finished job 1
+All workers finished gracefully
+Program finished!
 ```
 
-## Customization
-
-- Change the number of workers in `main.go`
-- Modify buffer size for the job channel
-- Add different job types by extending the `Job` struct
-- Implement different processing logic in the `Process()` method
+This implementation provides enterprise-grade reliability for job processing systems!
