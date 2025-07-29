@@ -53,10 +53,11 @@ func FanInStream(workerChannels []<-chan models.Order) <-chan models.Order {
 		}(ch)
 	}
 
-	// Start a goroutine to close output when all input channels are done
+	// Starts a goroutine to wait for all worker channels to finish, then closes the output channel.
+	// This runs in the background so the function can return the output channel immediately,
+	// allowing the caller to start reading data without waiting.
 	go func() {
 		wg.Wait()
-
 		close(output)
 	}()
 
